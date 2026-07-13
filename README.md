@@ -13,7 +13,6 @@ Most Electron starter kits give you a working app and let architecture happen or
 - **Core logic never talks to IPC directly.** Business logic is portable, testable, and doesn't care whether it's running in a main process or a test harness.
 - **IPC describes *what* happens, not *how*.** Window mechanics live in one place, not scattered across every handler.
 - **Established abstractions replace raw Node.js calls.** File access, window control, and event tracking all go through framework-level modules instead of ad hoc `fs`/`path`/`BrowserWindow` calls.
-- **Documentation and code are never allowed to drift.** Comments track code, not the other way around, and stale ("ghost") code is treated as a bug.
 
 ---
 
@@ -48,59 +47,75 @@ The renderer/UI layer. Talks to the rest of the app only through the bridge expo
 
 ## Core Principles
 
-These rules aren't suggestions — they're what keeps the three layers honest:
+These rules aren't suggestions — they're what keeps the three layers safe:
 
 1. **IPC files express *what* happens.** All `BrowserWindow` mechanics belong in the windowing module, not inline in IPC handlers.
 2. **Core modules have zero IPC.** If a function needs to know about `ipcMain` or `ipcRenderer`, it doesn't belong in eCORE.
 3. **Use framework abstractions over raw Node.js calls.** Prefer the provided `mod.dir`, `mod.window`, and similar helpers to calling `fs`, `path`, or `BrowserWindow` directly.
-4. **Source code is the source of truth.** Comments describe intent; they never override what the code actually does.
-5. **No Ghost Code.** Dead code paths and stale references get removed, not commented out and forgotten.
-6. **Comments Must Track Code.** A comment that no longer matches its function is treated as a defect.
 
 ---
 
 ## Getting Started
 
-```bash
-npm install novaluce
-```
+NovaLuce doesn't work like a typical npm package you `require()` into your own code — there's no import step and no manual wiring. It's convention-based: you drop a file in the right folder, and the framework's registry discovers, validates, and boots it automatically.
+
+Application startup (`main.js`) does two things:
 
 ```js
-const { core, window, ipc } = require('novaluce');
-
-// eCORE: pure logic, no IPC awareness
-const data = core.dir.read('./config.json');
-
-// eDepend: window lifecycle through framework abstractions
-const win = window.create({ width: 1200, height: 800 });
-win.onceLoaded(() => win.show());
-
-// IPC stays declarative — describes what happens, not how
-ipc.handle('config:get', () => data);
+await load();   // eCORE: scans lib/ and registers every module (mod.dir, mod.window, mod.ipc, ...)
+await init();   // eCORE: boots each module in dependency order
+await start();  // eDepend: scans eDepend/ipc/ and wires every *.ipc.js it finds
 ```
 
-> Full setup instructions, a step-by-step walkthrough, and a JavaScript primer for contributors newer to async patterns are available in the docs.
+You never touch `main.js`. All app behavior lives in `eDepend/ipc/*.ipc.js` files — each one exports a `name`, its allowed IPC channels, optional payload `schemas`, and a `register(mod)` function. Drop a new file in that folder and it's live on next boot; no imports, no registration calls.
+
+### Hello World
+
+Create `eDepend/ipc/hello.ipc.js`:
+
+```js
+module.exports = {
+
+    name: 'hello',
+
+    allowedChannels: {
+        ReceivingFromUI: ['hello:get-greeting'],
+        SendingToUI:     [],
+    },
+
+    schemas: {
+        'hello:get-greeting': null, // no payload expected
+    },
+
+    register(mod) {
+        // mod.ipc, mod.window, mod.dir — every core module is already
+        // loaded and handed to you here. Nothing to import.
+        mod.ipc.RequestWithReply('hello:get-greeting', () => {
+            return 'Hello from NovaLuce!';
+        });
+    },
+
+};
+```
+
+From the renderer (`Interface/`), call it through `window.bridge` — the only thing exposed to renderer code, wired up by the preload layer:
+
+```js
+const greeting = await bridge.awaitReply('hello:get-greeting');
+console.log(greeting); // "Hello from NovaLuce!"
+```
+
+That's the whole workflow: declare the channel, implement `register(mod)`, call it from the renderer through `bridge`. The framework handles discovery, security allowlisting, and payload validation for you.
 
 ---
 
 ## Documentation
 
-Complete developer documentation — including a beginner-friendly guide and a full function reference — lives in [`How-To-Use.html`](./docs/How-To-Use.html).
+Complete developer documentation — including a beginner-friendly guide and a full function reference — lives in How-To-Use.html.
 
 - **Zero to Running** — quick-start steps, plus a deeper "Understand" walkthrough for those who want the *why*
 - **Learn The Language** — a primer on the JS patterns the framework leans on (async/await, Promises, modules, pub/sub)
 - **Function Reference** — every real function across the codebase
-
----
-
-## Contributing
-
-Contributions are welcome. Before opening a PR, please make sure changes respect the layer boundaries above — a good rule of thumb: if you're not sure which layer something belongs in, it probably needs to be split rather than placed in the most convenient file.
-
-1. Fork the repo and create a feature branch
-2. Keep core logic free of IPC/Electron dependencies
-3. Update documentation alongside any code change ("Comments Must Track Code" applies to docs too)
-4. Open a PR with a clear description of what changed and why
 
 ---
 
